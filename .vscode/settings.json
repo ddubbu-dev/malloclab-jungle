@@ -1,0 +1,21 @@
+{
+  "files.autoSave": "afterDelay",
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "ms-vscode.cpptools",
+  "C_Cpp.clang_format_fallbackStyle": "Google",
+  "editor.tabSize": 2,
+
+  "workbench.iconTheme": "file-icons",
+  "code-runner.languageIdToFileExtensionMap": {
+    "bat": ".bat",
+    "powershell": ".ps1",
+    "typescript": ".ts"
+  },
+  "git.ignoreMissingGitWarning": true,
+  "code-runner.runInTerminal": true,
+  "C_Cpp.updateChannel": "Insiders",
+  "editor.multiCursorModifier": "ctrlCmd",
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.cStandard": "c11",
+  "terminal.integrated.defaultProfile.windows": "Command Prompt"
+}
