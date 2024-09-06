@@ -27,10 +27,10 @@ team_t team = {"jungle_9th", "SEONMI KIM", "dev.ddubbu@gmail.com", "", ""};
 
 /* 상수 */
 typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
-#define ADDR_SIZE 4                // Word size (bytes)
+#define ADDR_SIZE 4                // Word size (bytes) = Header, Footer block
 #define DSIZE 8                    // Double word (bytes) = ALIGNMENT
 #define ALIGNMENT 8                //
-#define MIN_BLOCK_SIZE (DSIZE * 2) //  Minimum block size (header + footer)
+#define MIN_BLOCK_SIZE (DSIZE * 2) // Minimum block size or length (header + footer)
 #define CHUNKSIZE (1 << 12)        // (=4096) Extend heap by this amount (bytes)
 
 /* 매크로 */
@@ -48,15 +48,6 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
  */
 #define GET_SIZE(p) (GET(p) & ~(ALIGNMENT - 1)) // GET(HDRP(p)) 일반화할 수 없는 이유? FTR에서 읽어올 수 있음
 #define GET_ALLOC(p) (GET(p) & 0x1)
-
-/**
- * rounds up to the nearest multiple of ALIGNMENT
- * ALIGNMENT 8이므로, 메모리 주소가 8의 배수가 되어야함 (더 빠르게 처리 가능)
- * Q. 8바이트 정렬
- * - (Yes) : 유지
- * - (No) : 7만큼 더한 후, & ~0x7 (=1000) 비트 연산 => 하위 3비트를 0으로 맞추기
- * */
-// #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 
 /**
  * Given block ptr bp, compute address of its header and footer
@@ -81,6 +72,8 @@ static void set_block(void *, size_t, BlockStatus);
  */
 int mm_init(void) {
     void *heap_listp;
+
+    // brk를 먼저 증가시켜도 되는 이유? old_brk를 반환
     if ((heap_listp = mem_sbrk(4 * ADDR_SIZE)) == (void *)-1)
         return -1;
 
@@ -88,7 +81,6 @@ int mm_init(void) {
     PUT(heap_listp + (1 * ADDR_SIZE), PACK(DSIZE, ALLOCATED)); // P.H
     PUT(heap_listp + (2 * ADDR_SIZE), PACK(DSIZE, ALLOCATED)); // P.F
     PUT(heap_listp + (3 * ADDR_SIZE), PACK(0, ALLOCATED));     // E.H
-    heap_listp += DSIZE;                                       // 실제 데이터 영역이 시작되는 (P.F 뒤의 위치)로 이동
 
     if (extend_heap(CHUNKSIZE / ADDR_SIZE) == NULL)
         return -1;
@@ -108,11 +100,10 @@ void mm_free(void *bp) {
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size) {
-    size_t asize;      /* Adjusted block size */
-    size_t extendsize; /* Amount to extend heap if no fit */
+    size_t asize;
+    size_t extend_heap_size;
     char *bp;
 
-    /* Ignore spurious requests */
     if (size <= 0)
         return NULL;
 
@@ -137,8 +128,8 @@ void *mm_malloc(size_t size) {
     }
 
     /* No fit found. Get more memory and place the block */
-    extendsize = MAX(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize / ADDR_SIZE)) == NULL)
+    extend_heap_size = MAX(asize, CHUNKSIZE);
+    if ((bp = extend_heap(extend_heap_size / ADDR_SIZE)) == NULL)
         return NULL;
 
     place(bp, asize);
