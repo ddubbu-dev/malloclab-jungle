@@ -23,31 +23,23 @@
  * NOTE TO STUDENTS: Before you do anything else, please
  * provide your team information in the following struct.
  ********************************************************/
-team_t team = {
-    "jungle_9th",
-    "SEONMI KIM",
-    "dev.ddubbu@gmail.com",
-};
-
-static void *extend_heap(size_t words);
-static void *coalesce(void *bp);
-static void *find_fit(size_t asize);
-static void place(void *bp, size_t size);
+team_t team = {"jungle_9th", "SEONMI KIM", "dev.ddubbu@gmail.com", "", ""};
 
 /* Basic constants and macros */
 
-#define FLAG_ALLOCATED 1
+#define FLAG_ALLOCATED 1 /* 할당됨 혹은 경계 블록의 사용 불가 상태 */
 #define FLAG_FREE 0
 
-#define WSIZE 4             /* Word and header/footer size (bytes) */
-#define DSIZE 8             /* Double word size (bytes) */
-#define CHUNKSIZE (1 << 12) /* (=4096) Extend ehap by this amount (bytes) */
+#define WSIZE 4 /* Word and header/footer size (bytes) */
+#define DSIZE 8 /* Double word size (bytes) = ALIGNMENT */
+#define MIN_BLOCK_SIZE (DSIZE * 2)
+#define CHUNKSIZE (1 << 12) /* (=4096) Extend heap by this amount (bytes) */
 
 #define MAX(x, y) (x > y ? x : y)
 
 /**
  * Pack a size and allocated bit into a word
- * 블록 크기 상위비트 | 할당 상태 하위 비트
+ * 블록 크기 상위비트 | 할당 상태 하위 비트 (FLAG_ALLOCATED / FLAG_FREE)
  */
 #define PACK(size, allocated) ((size) | (allocated))
 
@@ -61,7 +53,7 @@ static void place(void *bp, size_t size);
  * ~0x7 = ~(0000 0111) = 1111 1000
  * 0x1 = (0000 0001)
  */
-#define GET_SIZE(p) (GET(p) & ~0x7)
+#define GET_SIZE(p) (GET(p) & ~0x7)  // TODO: HDRP 포함 로직으로 바뀌어야함
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
 /**
@@ -85,10 +77,22 @@ static void place(void *bp, size_t size);
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
 
-/* rounds up to the nearest multiple of ALIGNMENT */
+/**
+ * rounds up to the nearest multiple of ALIGNMENT
+ * ALIGNMENT 8 이므로, 메모리 주소가 8의 배수가 되어야함 (더 빠르게 처리 가능)
+ * Q. 8바이트 정렬
+ * - (Yes) : 유지
+ * - (No) : 7만큼 더한 후, & ~0x7 (=1000) 비트 연산 => 하위 3비트를 0으로 맞추기
+ * */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+
+static void *extend_heap(size_t words);
+static void *coalesce(void *bp);
+static void *find_fit(size_t asize);
+static void place(void *bp, size_t size);
+static void init_block(void *bp);  // TODO
 
 /*
  * mm_init - initialize the malloc package.
@@ -98,11 +102,13 @@ int mm_init(void) {
   /* Create the initial empty heap */
   if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1) return -1;
 
-  PUT(heap_listp, 0);                            /* Alignment padding */
-  PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-  PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-  PUT(heap_listp + (3 * WSIZE), PACK(0, 1));     /* Epilogue header */
-  heap_listp += (2 * WSIZE); /* 실제 데이터 영역이 시작되는 위치로 이동 */
+  PUT(heap_listp, 0); /* Alignment padding */
+  /* Prologue, Epliogue : 힙 경계 식별을 위함 */
+  PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, FLAG_ALLOCATED)); /* P.H */
+  /* Q. 시작 주소 확인 필요 */
+  PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, FLAG_ALLOCATED)); /* P.F */
+  PUT(heap_listp + (3 * WSIZE), PACK(0, FLAG_ALLOCATED));     /* E.H */
+  heap_listp += DSIZE; /* 실제 데이터 영역이 시작되는 (P.F 뒤의 위치)로 이동 */
 
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) return -1;
@@ -129,15 +135,20 @@ void *mm_malloc(size_t size) {
   char *bp;
 
   /* Ignore spurious requests */
-  if (size == 0) return NULL;
+  if (size <= 0) return NULL;
 
   /**
    * Adjust block size to include overhead and alignment reqs.
    * 최소 16바이트 크기의 블록 구성
    * */
   if (size <= DSIZE)
-    asize = 2 * DSIZE;
+    asize = MIN_BLOCK_SIZE;
   else
+    /**
+     * 1. (size + (헤더와 푸터 크기) + (정렬 맞추기 보정))
+     * 2. asize / DSIZE = 필요한 블록 크기 계산
+     * 3. asize * DSIZE = 실제 메모리 블록 크기 결정
+     * */
     asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
   /* Search the free list for a fit */
@@ -166,7 +177,7 @@ void *mm_realloc(void *ptr, size_t size) {
   if (newptr == NULL) return NULL;
   copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
   if (size < copySize) copySize = size;
-  memcpy(newptr, oldptr, copySize);
+  memcpy(newptr, oldptr, copySize);  // Q. 어딨음?
   mm_free(oldptr);
   return newptr;
 }
@@ -234,20 +245,35 @@ static void *coalesce(void *bp) {
 
 /* First Fit : heap_listp 처음부터 검색 후 크기가 맞는 첫 가용 블록 선택 */
 static void *find_fit(size_t asize) {
-  char *bp = 0;
+  char *bp = heap_listp;
 
   while (1) {
     size_t size = GET_SIZE(HDRP(bp));
-    if (size >= asize) return bp;
+    int allocated = GET_ALLOC(bp);
+    if (!allocated && size >= asize) return bp;
     bp = NEXT_BLKP(bp);
   }
+
+  return NULL;  // no fit
 }
 
 /**
  * 가용 블록의 시작 부분에 배치 후
  * 나머지 부분의 크기가 최소 블록 크기와 같거나 큰 경우에만 분할 */
 static void place(void *bp, size_t asize) {
-  PUT(HDRP(bp), PACK(asize, FLAG_ALLOCATED));
-  PUT(FTRP(bp), PACK(asize, FLAG_ALLOCATED));
-  // TODO: 분할
+  size_t cur_size = GET_SIZE(HDRP(bp));
+
+  // Q. 경계 블록의 경우 사이즈가 DSIZE인지 WSIZE 인지..
+  if ((cur_size - asize) >= 2 * DSIZE) {
+    PUT(HDRP(bp), PACK(asize, FLAG_ALLOCATED));
+    PUT(FTRP(bp), PACK(asize, FLAG_ALLOCATED));
+
+    // 분할 : 여유 블록 초기화
+    bp = NEXT_BLKP(bp);
+    PUT(HDRP(bp), PACK(cur_size - asize, 0));
+    PUT(FTRP(bp), PACK(cur_size - asize, 0));
+  } else {
+    PUT(HDRP(bp), PACK(cur_size, FLAG_ALLOCATED));
+    PUT(FTRP(bp), PACK(cur_size, FLAG_ALLOCATED));
+  }
 }
