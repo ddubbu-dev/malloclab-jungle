@@ -3,6 +3,7 @@
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "ms-vscode.cpptools",
   "C_Cpp.clang_format_fallbackStyle": "Google",
+  "C_Cpp.clang_format_style": "{ IndentWidth: 4, ColumnLimit: 200 }",
   "editor.tabSize": 2,
 
   "workbench.iconTheme": "file-icons",
