@@ -35,6 +35,10 @@ static void *find_fit(size_t asize);
 static void place(void *bp, size_t size);
 
 /* Basic constants and macros */
+
+#define FLAG_ALLOCATED 1
+#define FLAG_FREE 0
+
 #define WSIZE 4             /* Word and header/footer size (bytes) */
 #define DSIZE 8             /* Double word size (bytes) */
 #define CHUNKSIZE (1 << 12) /* (=4096) Extend ehap by this amount (bytes) */
@@ -110,8 +114,8 @@ int mm_init(void) {
 void mm_free(void *bp) {
   size_t size = GET_SIZE(HDRP(bp));
 
-  PUT(HDRP(bp), PACK(size, 0));
-  PUT(FTRP(bp), PACK(size, 0));
+  PUT(HDRP(bp), PACK(size, FLAG_FREE));
+  PUT(FTRP(bp), PACK(size, FLAG_FREE));
   coalesce(bp);
 }
 
@@ -178,8 +182,8 @@ static void *extend_heap(size_t words) {
   if ((long)(bp = mem_sbrk(size)) == -1) return NULL;
 
   /* Initialize free block header/footer and the epilogue header */
-  PUT(HDRP(bp), PACK(size, 0));         /* Free block header */
-  PUT(FTRP(bp), PACK(size, 0));         /* Free block footer */
+  PUT(HDRP(bp), PACK(size, FLAG_FREE)); /* Free block header */
+  PUT(FTRP(bp), PACK(size, FLAG_FREE)); /* Free block footer */
   PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
 
   /* Coalesce if the previous block was free */
@@ -201,8 +205,8 @@ static void *coalesce(void *bp) {
      * - footer : bp Q. FTRP(NEXT_BLKP(bp)) 로 바뀌어야하는거 아닌가?
      * */
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    PUT(HDRP(bp), PACK(size, FLAG_FREE));
+    PUT(FTRP(bp), PACK(size, FLAG_FREE));
   } else if (!prev_alloc && next_alloc) {
     /**
      * Case 3 : new block
@@ -210,8 +214,8 @@ static void *coalesce(void *bp) {
      * - footer : FTRP(bp)
      * */
     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-    PUT(FTRP(bp), PACK(size, 0));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, FLAG_FREE));
+    PUT(HDRP(PREV_BLKP(bp)), PACK(size, FLAG_FREE));
     bp = PREV_BLKP(bp);
   } else {
     /**
@@ -220,8 +224,8 @@ static void *coalesce(void *bp) {
      * - footer : FTRP(NEXT_BLKP(bp))
      * */
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+    PUT(HDRP(PREV_BLKP(bp)), PACK(size, FLAG_FREE));
+    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, FLAG_FREE));
     bp = PREV_BLKP(bp);
   }
 
@@ -243,7 +247,7 @@ static void *find_fit(size_t asize) {
  * 가용 블록의 시작 부분에 배치 후
  * 나머지 부분의 크기가 최소 블록 크기와 같거나 큰 경우에만 분할 */
 static void place(void *bp, size_t asize) {
-  PUT(HDRP(bp), PACK(asize, 1));
-  PUT(FTRP(bp), PACK(asize, 1));
+  PUT(HDRP(bp), PACK(asize, FLAG_ALLOCATED));
+  PUT(FTRP(bp), PACK(asize, FLAG_ALLOCATED));
   // TODO: 분할
 }
