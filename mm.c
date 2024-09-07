@@ -30,7 +30,7 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define ADDR_SIZE 4                // Word size (bytes) = Header, Footer block
 #define DSIZE 8                    // Double word (bytes) = ALIGNMENT
 #define ALIGNMENT 8                //
-#define MIN_BLOCK_SIZE (DSIZE * 2) // Minimum block size or length (header + footer)
+#define MIN_BLOCK_SIZE (DSIZE * 2) // Minimum block size or length 8(header + footer) + 8(payload)
 #define CHUNKSIZE (1 << 12)        // (=4096) Extend heap by this amount (bytes)
 
 /* 매크로 */
@@ -78,9 +78,9 @@ int mm_init(void) {
         return -1;
 
     PUT(heap_listp, 0);                                        // Alignment padding
-    PUT(heap_listp + (1 * ADDR_SIZE), PACK(DSIZE, ALLOCATED)); // P.H
-    PUT(heap_listp + (2 * ADDR_SIZE), PACK(DSIZE, ALLOCATED)); // P.F
-    PUT(heap_listp + (3 * ADDR_SIZE), PACK(0, ALLOCATED));     // E.H
+    PUT(heap_listp + (1 * ADDR_SIZE), PACK(DSIZE, ALLOCATED)); // P.H : P.F와 같이 DSIZE 점유
+    PUT(heap_listp + (2 * ADDR_SIZE), PACK(DSIZE, ALLOCATED)); // P.F : P.H와 같이 가장자리 조건 제거
+    PUT(heap_listp + (3 * ADDR_SIZE), PACK(0, ALLOCATED));     // E.H : 가장자리 조건 제거
 
     if (extend_heap(CHUNKSIZE / ADDR_SIZE) == NULL)
         return -1;
@@ -107,19 +107,21 @@ void *mm_malloc(size_t size) {
     if (size <= 0)
         return NULL;
 
+    size_t header_n_footer_size = 2 * ADDR_SIZE;
+
     /**
      * Adjust block size to include overhead and alignment reqs.
      * 최소 16바이트 크기의 블록 구성
      * */
     if (size <= DSIZE)
-        asize = MIN_BLOCK_SIZE;
+        asize = MIN_BLOCK_SIZE; // header_n_footer_size + DSIZE
     else
         /**
          * 1. (size + (헤더와 푸터 크기) + (정렬 맞추기 보정))
          * 2. asize / DSIZE = 필요한 블록 크기 계산
          * 3. asize * DSIZE = 실제 메모리 블록 크기 결정
          * */
-        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+        asize = DSIZE * ((size + (header_n_footer_size) + (DSIZE - 1)) / DSIZE);
 
     /* Search the free list for a fit */
     if ((bp = find_first_fit(asize)) != NULL) {
@@ -152,8 +154,8 @@ void *mm_realloc(void *ptr, size_t size) {
     if (newptr == NULL)
         return NULL;
 
-    size_t copy_data_size = MIN(size, GET_SIZE(HDRP(ptr)) - 2 * ADDR_SIZE);
-    memcpy(newptr, ptr, copy_data_size);
+    size_t copy_size = MIN(size, GET_SIZE(HDRP(ptr)));
+    memcpy(newptr, ptr, copy_size);
     mm_free(ptr);
     return newptr;
 }
@@ -183,7 +185,7 @@ static void *coalesce(void *bp) {
         /**
          * Case 2 : new block
          * - header : bp
-         * - footer : bp Q. FTRP(NEXT_BLKP(bp)) 로 바뀌어야하는거 아닌가?
+         * - footer : bp (w. new bp size)
          * */
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size, FREE));
@@ -217,7 +219,7 @@ static void *find_first_fit(size_t asize) {
     void *bp = mem_heap_lo() + 2 * ADDR_SIZE;
     size_t size;
 
-    while (GET_SIZE(HDRP(bp)) > 0) {
+    while (GET_SIZE(HDRP(bp)) > 0) { // GET_SIZE(E.H)==0 덕분에 가장자리 탈출 가능
         if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
             return bp;
         bp = NEXT_BLKP(bp);
@@ -232,12 +234,13 @@ static void *find_first_fit(size_t asize) {
  * */
 static void place(void *bp, size_t asize) {
     size_t cur_size = GET_SIZE(HDRP(bp));
-    set_block(bp, asize, ALLOCATED);
-    if ((cur_size - asize) >= MIN_BLOCK_SIZE) {
+    size_t remain_size = cur_size - asize;
+
+    if (remain_size >= MIN_BLOCK_SIZE) {
         set_block(bp, asize, ALLOCATED);
-        set_block(NEXT_BLKP(bp), cur_size - asize, FREE);
+        set_block(NEXT_BLKP(bp), remain_size, FREE);
     } else {
-        set_block(bp, cur_size, ALLOCATED);
+        set_block(bp, cur_size, ALLOCATED); // w. padding
     }
 }
 
