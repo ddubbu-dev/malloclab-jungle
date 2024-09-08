@@ -81,12 +81,10 @@ static void set_block(void *, size_t, BlockStatus);
 
 char *start_p;
 int mm_init(void) {
-    printf("[init] start");
     void *heap_listp;
 
     if ((heap_listp = mem_sbrk(6 * ADDR_SIZE)) == (void *)-1)
         return -1;
-    printf("[init] change 1");
 
     PUT(heap_listp + 0, PACK(0, ALLOCATED));                              // start(Alignment padding) - Q. root 생기면서 양끝 padding 제거해도 될거 같은데
     PUT(heap_listp + (1 * ADDR_SIZE), PACK(FINAL_BLOCK_SIZE, ALLOCATED)); // Root Header
@@ -94,13 +92,10 @@ int mm_init(void) {
     PUT(heap_listp + (3 * ADDR_SIZE), NULL);                              // Root next
     PUT(heap_listp + (4 * ADDR_SIZE), PACK(FINAL_BLOCK_SIZE, ALLOCATED)); // Root Footer
     PUT(heap_listp + (5 * ADDR_SIZE), PACK(0, ALLOCATED));                // end(가장자리 조건 제거)
-    start_p = 2 * ADDR_SIZE;
-    printf("[init] change 2");
+    start_p = heap_listp + 2 * ADDR_SIZE;
 
     if (extend_heap(CHUNKSIZE / ADDR_SIZE) == NULL)
         return -1;
-
-    printf("[init] end");
 
     return 0;
 }
@@ -186,8 +181,10 @@ static void add_free_list(char *bp, size_t size) {
     PUT_ADDR(bp + ADDR_SIZE, start_p); // next 연결
 
     // 기존 블록
-    PUT_ADDR(start_p, bp); // prev 연결
-    start_p = bp;          // 갱신
+    if (start_p != NULL) {
+        PUT_ADDR(start_p, bp); // 기존 블록의 prev를 새 블록으로 연결
+    }
+    start_p = bp; // 갱신
 }
 
 static void *extend_heap(size_t words) {
@@ -202,12 +199,22 @@ static void *extend_heap(size_t words) {
 }
 
 static void exclude_free_block(char *bp) {
-    // (현재 block 기준) prev, next block 찾기
-    size_t prev_bp = PREV_FREE_BLKP(bp);
-    size_t next_bp = NEXT_FREE_BLKP(bp);
+    // 현재 block 기준으로 prev, next block 찾기
+    char *prev_bp = PREV_FREE_BLKP(bp);
+    char *next_bp = NEXT_FREE_BLKP(bp);
 
-    PUT_ADDR(prev_bp + ADDR_SIZE, next_bp);
-    PUT_ADDR(next_bp, prev_bp);
+    if (prev_bp != NULL) {
+        // 이전 블록이 있는 경우, 이전 블록의 next를 현재 블록의 next로 연결
+        PUT_ADDR(prev_bp + ADDR_SIZE, next_bp);
+    } else {
+        // 이전 블록이 없는 경우 (즉, 첫 번째 블록인 경우), 시작 포인터를 다음 블록으로 갱신
+        start_p = next_bp;
+    }
+
+    if (next_bp != NULL) {
+        // 다음 블록이 있는 경우, 다음 블록의 prev를 현재 블록의 prev로 연결
+        PUT_ADDR(next_bp, prev_bp);
+    }
 }
 
 static void *coalesce(void *bp) {
@@ -279,14 +286,14 @@ static void *coalesce(void *bp) {
 }
 
 static void *find_first_fit(size_t asize) {
-    void *bp = start_p;                  // = prevp
-    while (NEXT_FREE_BLKP(bp) != NULL) { // Final Block 여부 확인
-        if (asize <= GET_SIZE(HDRP(bp)))
+    void *bp = start_p;
+    while (bp != NULL) {
+        if (asize <= GET_SIZE(HDRP(bp))) {
             return bp;
+        }
         bp = NEXT_FREE_BLKP(bp);
     }
-
-    return NULL; // No Fit.
+    return NULL;
 }
 
 /**
