@@ -35,12 +35,11 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define FINAL_BLOCK_SIZE (ADDR_SIZE * 4)
 
 /* 매크로 */
-#define MAX(x, y) (x > y ? x : y)                    //
-#define MIN(x, y) (x < y ? x : y)                    //
-#define PUT(p, val) (*(unsigned int *)(p) = val)     //
-#define PUT_ADDR(p, addr) (*(void **)(p) = addr)     // TODO
-#define GET(p) (*(unsigned int *)(p))                // read a word(4bytes, size of int) at address p
-#define GET_ADDR(p) (*(void **)(p))                  // TODO
+#define MAX(x, y) (x > y ? x : y)                //
+#define MIN(x, y) (x < y ? x : y)                //
+#define PUT(p, val) (*(unsigned int *)(p) = val) //
+#define GET(p) (*(unsigned int *)(p))            // read a word(4bytes, size of int) at address p
+
 #define PACK(size, allocated) ((size) | (allocated)) // 상위 : block size | 하위 : 할당 비트 (BlockStatus)
 
 /**
@@ -64,8 +63,8 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - 2 * ADDR_SIZE))) // prev_ftrp에서 size 얻기
 
-#define PREV_FREE_BLKP(bp) (GET_ADDR(bp))
-#define NEXT_FREE_BLKP(bp) (GET_ADDR(bp + ADDR_SIZE))
+#define PREV_FREEP(bp) (*(void **)(bp))
+#define NEXT_FREEP(bp) (*(void **)(bp + ADDR_SIZE))
 
 static void add_free_list(char *bp, size_t size);
 static void *extend_heap(size_t words);
@@ -177,12 +176,12 @@ void *mm_realloc(void *ptr, size_t size) {
 static void add_free_list(char *bp, size_t size) {
     // 신규 블록
     set_block(bp, size, FREE);
-    PUT_ADDR(bp, NULL);                // prev 연결
-    PUT_ADDR(bp + ADDR_SIZE, start_p); // next 연결
+    PREV_FREEP(bp) = NULL;    // prev 연결
+    NEXT_FREEP(bp) = start_p; // next 연결
 
     // 기존 블록
     if (start_p != NULL) {
-        PUT_ADDR(start_p, bp); // 기존 블록의 prev를 새 블록으로 연결
+        PREV_FREEP(start_p) = bp; // 기존 블록의 prev를 새 블록으로 연결
     }
     start_p = bp; // 갱신
 }
@@ -200,12 +199,12 @@ static void *extend_heap(size_t words) {
 
 static void exclude_free_block(char *bp) {
     // 현재 block 기준으로 prev, next block 찾기
-    char *prev_bp = PREV_FREE_BLKP(bp);
-    char *next_bp = NEXT_FREE_BLKP(bp);
+    char *prev_bp = PREV_FREEP(bp);
+    char *next_bp = NEXT_FREEP(bp);
 
     if (prev_bp != NULL) {
         // 이전 블록이 있는 경우, 이전 블록의 next를 현재 블록의 next로 연결
-        PUT_ADDR(prev_bp + ADDR_SIZE, next_bp);
+        NEXT_FREEP(prev_bp) = next_bp;
     } else {
         // 이전 블록이 없는 경우 (즉, 첫 번째 블록인 경우), 시작 포인터를 다음 블록으로 갱신
         start_p = next_bp;
@@ -213,7 +212,7 @@ static void exclude_free_block(char *bp) {
 
     if (next_bp != NULL) {
         // 다음 블록이 있는 경우, 다음 블록의 prev를 현재 블록의 prev로 연결
-        PUT_ADDR(next_bp, prev_bp);
+        PREV_FREEP(next_bp) = prev_bp;
     }
 }
 
@@ -291,7 +290,7 @@ static void *find_first_fit(size_t asize) {
         if (asize <= GET_SIZE(HDRP(bp))) {
             return bp;
         }
-        bp = NEXT_FREE_BLKP(bp);
+        bp = NEXT_FREEP(bp);
     }
     return NULL;
 }
