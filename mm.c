@@ -36,7 +36,7 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define CHUNKSIZE (1 << 12)        // (=4096) Extend heap by this amount (bytes)
 #define FINAL_BLOCK_SIZE (ADDR_SIZE * 4)
 #define IDX_LIST_CNT 14
-#define IDX_LIST_BLK_SIZE (IDX_LIST_CNT + 2)
+#define IDX_LIST_BLK_SIZE (IDX_LIST_CNT + 4)
 
 /* 매크로 */
 #define MAX(x, y) (x > y ? x : y)                //
@@ -68,7 +68,6 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - 2 * ADDR_SIZE))) // prev_ftrp에서 size 얻기
 
 #define BLK_PTR(p) (*(void **)(p))
-// #define PREV_FREEP(bp) (BLK_PTR(bp))
 #define NEXT_FREEP(bp) (BLK_PTR(bp))
 
 static int find_start_idx(size_t size);
@@ -82,16 +81,15 @@ static void set_block(void *, size_t, BlockStatus);
  */
 
 char *index_list_p;
-char *start_p; // TODO: 제거
 int mm_init(void) {
     void *heap_listp;
 
-    if ((heap_listp = mem_sbrk((4 + IDX_LIST_CNT) * ADDR_SIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk((IDX_LIST_BLK_SIZE)*ADDR_SIZE)) == (void *)-1)
         return -1;
 
-    PUT(heap_listp + 0, PACK(0, ALLOCATED));                               // start(Alignment padding) - Q. root 생기면서 양끝 padding 제거해도 될거 같은데
-    PUT(heap_listp + (1 * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE, ALLOCATED)); // index list header
-    for (int i = 0; i < IDX_LIST_CNT; i++) {
+    PUT(heap_listp + 0, PACK(0, ALLOCATED));                                           // start(Alignment padding) - Q. root 생기면서 양끝 padding 제거해도 될거 같은데
+    PUT(heap_listp + (1 * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE * ADDR_SIZE, ALLOCATED)); // index list header
+    for (int i = 2; i < 2 + IDX_LIST_CNT; i++) {
         /**
          * size classes
          * 2^0 {1}
@@ -103,10 +101,9 @@ int mm_init(void) {
          */
         PUT(heap_listp + (i * ADDR_SIZE), NULL);
     }
-    PUT(heap_listp + (IDX_LIST_CNT * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE, ALLOCATED)); // index list footer
-    PUT(heap_listp + ((IDX_LIST_BLK_SIZE + 5) * ADDR_SIZE), PACK(0, ALLOCATED));      // end(가장자리 조건 제거)
+    PUT(heap_listp + ((2 + IDX_LIST_CNT) * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE * ADDR_SIZE, ALLOCATED)); // index list footer
+    PUT(heap_listp + ((3 + IDX_LIST_CNT) * ADDR_SIZE), PACK(0, ALLOCATED));                             // end(가장자리 조건 제거)
     index_list_p = heap_listp + 2 * ADDR_SIZE;
-    start_p = heap_listp + 2 * ADDR_SIZE;
 
     return 0;
 }
@@ -190,9 +187,6 @@ void *mm_realloc(void *ptr, size_t size) {
 /* ==================== Utility ==================== */
 
 static int find_start_idx(size_t size) {
-    if (size == 0)
-        return -1; // Invalid size
-
     if (size > 2 << (IDX_LIST_CNT - 2)) {
         return IDX_LIST_CNT - 1;
     }
@@ -201,10 +195,7 @@ static int find_start_idx(size_t size) {
 }
 
 static void **find_start_bpp(size_t size) {
-    int idx;
-    if ((idx = find_start_idx(size)) == -1)
-        return NULL;
-
+    int idx = find_start_idx(size);
     return index_list_p + idx * ADDR_SIZE;
 }
 
