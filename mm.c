@@ -68,7 +68,6 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - 2 * ADDR_SIZE))) // prev_ftrp에서 size 얻기
 
 #define BLK_PTR(p) (*(void **)(p))
-#define NEXT_FREEP(bp) (BLK_PTR(bp))
 
 static int find_start_idx(size_t size);
 static void **find_start_bpp(size_t size);
@@ -209,7 +208,7 @@ static void *extend_heap(size_t words) {
     return bp;
 }
 
-static void exclude_free_block(void **bpp) { BLK_PTR(bpp) = NEXT_FREEP(bpp); }
+static void exclude_free_block(void **bpp) { BLK_PTR(bpp) = BLK_PTR(BLK_PTR(bpp)); }
 
 static void set_block(void *bp, size_t size, BlockStatus alloced) {
     PUT(HDRP(bp), PACK(size, alloced));
