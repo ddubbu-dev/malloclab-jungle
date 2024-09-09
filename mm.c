@@ -9,7 +9,8 @@
  * NOTE TO STUDENTS: Replace this header comment with your own header
  * comment that gives a high level description of your solution.
  */
-#include "mm.h"
+
+#include <math.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -18,7 +19,7 @@
 #include <unistd.h>
 
 #include "memlib.h"
-#include <math.h>
+#include "mm.h"
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -114,7 +115,8 @@ int mm_init(void) {
 void mm_free(void *bp) {
     size_t size = GET_SIZE(HDRP(bp));
     set_block(bp, size, FREE);
-    coalesce(bp);
+
+    // TODO: add_insert_free_list
 }
 
 /*
@@ -157,6 +159,7 @@ void *mm_malloc(size_t size) {
     int idx = find_start_idx(size);
     extend_heap_size = 1 << idx;
     if ((bp = extend_heap(extend_heap_size / ADDR_SIZE)) == NULL)
+        // free_list 연결 불필요, 추후 free 시 연결해주면 됨
         return NULL;
 
     return bp;
@@ -212,11 +215,10 @@ static void *extend_heap(size_t words) {
         return NULL;
 
     set_block(bp, size, FREE);
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); // New epilogue header
-    return coalesce(bp);
+    return bp;
 }
 
-static void exclude_free_block(void **bpp) { BLK_PTR(bpp) = NEXT_FREEP(BLK_PTR(bpp)); }
+static void exclude_free_block(void **bpp) { BLK_PTR(bpp) = NEXT_FREEP(bpp); }
 
 static void set_block(void *bp, size_t size, BlockStatus alloced) {
     PUT(HDRP(bp), PACK(size, alloced));
