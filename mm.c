@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "memlib.h"
+#include <math.h>
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -33,6 +34,8 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define MIN_BLOCK_SIZE (DSIZE * 2) // Minimum block size or length 8(header + footer) + 8(payload has prev, next)
 #define CHUNKSIZE (1 << 12)        // (=4096) Extend heap by this amount (bytes)
 #define FINAL_BLOCK_SIZE (ADDR_SIZE * 4)
+#define IDX_LIST_CNT 8
+#define IDX_LIST_BLK_SIZE (IDX_LIST_CNT + 2)
 
 /* 매크로 */
 #define MAX(x, y) (x > y ? x : y)                //
@@ -63,9 +66,11 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - 2 * ADDR_SIZE))) // prev_ftrp에서 size 얻기
 
-#define PREV_FREEP(bp) (*(void **)(bp))
-#define NEXT_FREEP(bp) (*(void **)(bp + ADDR_SIZE))
+#define BLK_PTR(p) (*(void **)(p))
+#define PREV_FREEP(bp) (BLK_PTR(bp))
+#define NEXT_FREEP(bp) (BLK_PTR(bp + ADDR_SIZE))
 
+static int find_start_idx(size_t size);
 static void add_free_list(char *bp, size_t size);
 static void *extend_heap(size_t words);
 static void exclude_free_block(char *bp);
@@ -78,19 +83,33 @@ static void set_block(void *, size_t, BlockStatus);
  * mm_init - initialize the malloc package.
  */
 
-char *start_p;
+char *index_list_p;
+char *start_p; // TODO: 제거
 int mm_init(void) {
     void *heap_listp;
 
-    if ((heap_listp = mem_sbrk(6 * ADDR_SIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk((6 + IDX_LIST_CNT) * ADDR_SIZE)) == (void *)-1)
         return -1;
 
-    PUT(heap_listp + 0, PACK(0, ALLOCATED));                              // start(Alignment padding) - Q. root 생기면서 양끝 padding 제거해도 될거 같은데
-    PUT(heap_listp + (1 * ADDR_SIZE), PACK(FINAL_BLOCK_SIZE, ALLOCATED)); // Root Header
-    PUT(heap_listp + (2 * ADDR_SIZE), NULL);                              // Root prev
-    PUT(heap_listp + (3 * ADDR_SIZE), NULL);                              // Root next
-    PUT(heap_listp + (4 * ADDR_SIZE), PACK(FINAL_BLOCK_SIZE, ALLOCATED)); // Root Footer
-    PUT(heap_listp + (5 * ADDR_SIZE), PACK(0, ALLOCATED));                // end(가장자리 조건 제거)
+    PUT(heap_listp + 0, PACK(0, ALLOCATED));                               // start(Alignment padding) - Q. root 생기면서 양끝 padding 제거해도 될거 같은데
+    PUT(heap_listp + (1 * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE, ALLOCATED)); // index list header
+    for (int i = 0; i < IDX_LIST_CNT; i++) {
+        /**
+         * (1) 16 ~ 32
+         * (2) 33 ~ 64
+         * ...
+         * (N) 2^7+1 ~ 2^8
+         */
+        PUT(heap_listp + (i * ADDR_SIZE), NULL);
+    }
+    PUT(heap_listp + (IDX_LIST_CNT * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE, ALLOCATED)); // index list footer
+
+    PUT(heap_listp + ((IDX_LIST_BLK_SIZE + 1) * ADDR_SIZE), PACK(FINAL_BLOCK_SIZE, ALLOCATED)); // Root Header
+    PUT(heap_listp + ((IDX_LIST_BLK_SIZE + 2) * ADDR_SIZE), NULL);                              // Root prev
+    PUT(heap_listp + ((IDX_LIST_BLK_SIZE + 3) * ADDR_SIZE), NULL);                              // Root next
+    PUT(heap_listp + ((IDX_LIST_BLK_SIZE + 4) * ADDR_SIZE), PACK(FINAL_BLOCK_SIZE, ALLOCATED)); // Root Footer
+    PUT(heap_listp + ((IDX_LIST_BLK_SIZE + 5) * ADDR_SIZE), PACK(0, ALLOCATED));                // end(가장자리 조건 제거)
+    index_list_p = heap_listp + 2 * ADDR_SIZE;
     start_p = heap_listp + 2 * ADDR_SIZE;
 
     if (extend_heap(CHUNKSIZE / ADDR_SIZE) == NULL)
@@ -173,7 +192,12 @@ void *mm_realloc(void *ptr, size_t size) {
 
 /* ==================== Utility ==================== */
 
+static int find_start_idx(size_t size) { return (int)log2(size) - 4; }
+
 static void add_free_list(char *bp, size_t size) {
+    int start_idx = find_start_idx(size);
+    void *start_p = BLK_PTR(index_list_p + start_idx * ADDR_SIZE);
+
     // 신규 블록
     set_block(bp, size, FREE);
     PREV_FREEP(bp) = NULL;    // prev 연결
@@ -183,7 +207,7 @@ static void add_free_list(char *bp, size_t size) {
     if (start_p != NULL) {
         PREV_FREEP(start_p) = bp; // 기존 블록의 prev를 새 블록으로 연결
     }
-    start_p = bp; // 갱신
+    BLK_PTR(index_list_p + start_idx * ADDR_SIZE) = bp; // 갱신
 }
 
 static void *extend_heap(size_t words) {
@@ -286,12 +310,17 @@ static void *coalesce(void *bp) {
 }
 
 static void *find_first_fit(size_t asize) {
-    void *bp = start_p;
-    while (bp != NULL) {
-        if (asize <= GET_SIZE(HDRP(bp))) {
-            return bp;
+    int start_idx = find_start_idx(asize);
+
+    for (int i = start_idx; i <= IDX_LIST_CNT; i++) {
+        void *bp = index_list_p + i * ADDR_SIZE;
+
+        while (bp != NULL) {
+            if (asize <= GET_SIZE(HDRP(bp))) {
+                return bp;
+            }
+            bp = NEXT_FREEP(bp);
         }
-        bp = NEXT_FREEP(bp);
     }
     return NULL;
 }
