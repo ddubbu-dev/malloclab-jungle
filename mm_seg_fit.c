@@ -70,7 +70,7 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define PREV_FREEP(bp) (BLK_PTR(bp))
 #define NEXT_FREEP(bp) (BLK_PTR(bp + ADDR_SIZE))
 
-static int find_start_idx(size_t size);
+static int find_start_bpp(size_t size);
 static void add_free_list(char *bp, size_t size);
 static void *extend_heap(size_t words);
 static void exclude_free_block(char *bp);
@@ -192,10 +192,10 @@ void *mm_realloc(void *ptr, size_t size) {
 
 /* ==================== Utility ==================== */
 
-static int find_start_idx(size_t size) { return (int)log2(size) - 4; }
+static int find_start_bpp(size_t size) { return (int)log2(size) - 4; }
 
 static void add_free_list(char *bp, size_t size) {
-    int start_idx = find_start_idx(size);
+    int start_idx = find_start_bpp(size);
     void *start_p = BLK_PTR(index_list_p + start_idx * ADDR_SIZE);
 
     // 신규 블록
@@ -310,7 +310,7 @@ static void *coalesce(void *bp) {
 }
 
 static void *find_first_fit(size_t asize) {
-    int start_idx = find_start_idx(asize);
+    int start_idx = find_start_bpp(asize);
 
     for (int i = start_idx; i <= IDX_LIST_CNT; i++) {
         void *bp = index_list_p + i * ADDR_SIZE;
