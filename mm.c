@@ -35,7 +35,7 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define MIN_BLOCK_SIZE (DSIZE * 2) // Minimum block size or length 8(header + footer) + 8(payload has prev, next)
 #define CHUNKSIZE (1 << 12)        // (=4096) Extend heap by this amount (bytes)
 #define FINAL_BLOCK_SIZE (ADDR_SIZE * 4)
-#define IDX_LIST_CNT 14
+#define IDX_LIST_CNT 18
 #define IDX_LIST_BLK_SIZE (IDX_LIST_CNT + 4)
 
 /* 매크로 */
