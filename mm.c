@@ -27,6 +27,12 @@
  ********************************************************/
 team_t team = {"jungle_9th", "SEONMI KIM", "dev.ddubbu@gmail.com", "", ""};
 
+/*
+TODO: 고민사항 2개 추가 필요
+- free 할때 무한대 사이즈 어떻게?
+- 무한대 사이즈 free 할때 어느 index로? header 필요한거 아님?
+*/
+
 /* 상수 */
 typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define ADDR_SIZE 4                // Word size (bytes) = Header, Footer block
@@ -55,17 +61,8 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 #define GET_SIZE(p) (GET(p) & ~(ALIGNMENT - 1)) // GET(HDRP(p)) 일반화할 수 없는 exclude_free_block이유? FTR에서 읽어올 수 있음
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
-/**
- * Given block ptr bp, compute address of its header and footer
- * heap memory block: [header(word) | data | footer (word)]
- * bp: 메모리 블록의 데이터 영역을 가리키는 포인터
- * (char *): 1바이트 단위로 포인터 연산이 가능함
- * GET_SIZE(HDRP(bp)): 블록 전체 크기
- */
 #define HDRP(bp) ((char *)(bp) - ADDR_SIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - 2 * ADDR_SIZE)
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
-#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - 2 * ADDR_SIZE))) // prev_ftrp에서 size 얻기
 
 #define BLK_PTR(p) (*(void **)(p))
 
