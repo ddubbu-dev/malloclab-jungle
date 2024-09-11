@@ -35,14 +35,17 @@ TODO: 고민사항 2개 추가 필요
 
 /* 상수 */
 typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
-#define ADDR_SIZE 4                // Word size (bytes) = Header, Footer block
-#define DSIZE 8                    // Double word (bytes) = ALIGNMENT
-#define ALIGNMENT 8                //
-#define MIN_BLOCK_SIZE (DSIZE * 2) // Minimum block size or length 8(header + footer) + 8(payload has prev, next)
-#define CHUNKSIZE (1 << 12)        // (=4096) Extend heap by this amount (bytes)
+#define ADDR_SIZE 4         // Word size (bytes) = Header, Footer block
+#define DSIZE 8             // Double word (bytes) = ALIGNMENT
+#define ALIGNMENT 8         //
+#define CHUNKSIZE (1 << 12) // (=4096) Extend heap by this amount (bytes)
 #define FINAL_BLOCK_SIZE (ADDR_SIZE * 4)
-#define IDX_LIST_CNT 18
-#define IDX_LIST_BLK_SIZE (IDX_LIST_CNT + 4)
+#define IDX_LIST_CNT 22
+#define MIN_SIZE_CLASS_IDX 3 // =8byte (ADDR_SIZE * 2) = (header, suc pointer)
+// #define MAX_SIZE_CLASS_IDX 24      // =16MB
+#define MAX_SIZE_CLASS_IDX 22      // =4MB
+#define MIN_BLOCK_SIZE (DSIZE * 2) // TODO: MIN_SIZE_CLASS랑 정리 필요
+#define IDX_LIST_BLK_SIZE (IDX_LIST_CNT + 2)
 
 /* 매크로 */
 #define MAX(x, y) (x > y ? x : y)                //
@@ -58,19 +61,21 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
  * ~0x7 = ~(0000 0111) = 1111 1000
  * 0x1 = (0000 0001)
  */
-#define GET_SIZE(p) (GET(p) & ~(ALIGNMENT - 1)) // GET(HDRP(p)) 일반화할 수 없는 exclude_free_block이유? FTR에서 읽어올 수 있음
+#define GET_SIZE(p) (GET(p) & ~(ALIGNMENT - 1))
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
 #define HDRP(bp) ((char *)(bp) - ADDR_SIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - 2 * ADDR_SIZE)
 
 #define BLK_PTR(p) (*(void **)(p))
+#define NEXT_FREEP(bp) (BLK_PTR(bp + ADDR_SIZE))
 
-static int find_start_idx(size_t size);
+static int find_size_class_idx(size_t size);
 static void **find_start_bpp(size_t size);
 static void *extend_heap(size_t words);
 static void exclude_free_block(void **bpp);
 static void set_block(void *, size_t, BlockStatus);
+static void set_free_block(void *bp, size_t size, void *next_bp);
 
 /*
  * mm_init - initialize the malloc package.
@@ -80,26 +85,35 @@ char *index_list_p;
 int mm_init(void) {
     void *heap_listp;
 
-    if ((heap_listp = mem_sbrk((IDX_LIST_BLK_SIZE)*ADDR_SIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(((IDX_LIST_BLK_SIZE + 2)) * ADDR_SIZE)) == (void *)-1)
         return -1;
 
-    PUT(heap_listp + 0, PACK(0, ALLOCATED));                                           // start(Alignment padding) - Q. root 생기면서 양끝 padding 제거해도 될거 같은데
+    PUT(heap_listp + 0, PACK(0, ALLOCATED));                                           // start(Alignment padding)
     PUT(heap_listp + (1 * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE * ADDR_SIZE, ALLOCATED)); // index list header
     for (int i = 2; i < 2 + IDX_LIST_CNT; i++) {
         /**
          * size classes
-         * 2^0 {1}
-         * 2^1 {2}
-         * 2^2 {3, 4}
+         * (0) 2^3 {8}
+         * (1) 2^4 {16}
+         * (2) 2^5 {32}
+         * (3) 2^6 {64}
          * ...
-         * 2^12 {... , 4096}
-         * 2^13 {4097, inf}
+         * (20) 2^23 {2^23}
+         * (21) 2^24 {2^24}
          */
         PUT(heap_listp + (i * ADDR_SIZE), NULL);
     }
     PUT(heap_listp + ((2 + IDX_LIST_CNT) * ADDR_SIZE), PACK(IDX_LIST_BLK_SIZE * ADDR_SIZE, ALLOCATED)); // index list footer
     PUT(heap_listp + ((3 + IDX_LIST_CNT) * ADDR_SIZE), PACK(0, ALLOCATED));                             // end(가장자리 조건 제거)
     index_list_p = heap_listp + 2 * ADDR_SIZE;
+
+    int extend_heap_size = 1 << MAX_SIZE_CLASS_IDX;
+    void *bp;
+    if ((bp = extend_heap(extend_heap_size / ADDR_SIZE)) == NULL)
+        return NULL;
+
+    void *bpp = find_start_bpp(extend_heap_size); // last size class idx
+    BLK_PTR(bpp) = bp;
 
     return 0;
 }
@@ -149,8 +163,8 @@ void *mm_malloc(size_t size) {
     }
 
     /* No fit found. Get more memory and place the block */
-    int idx = find_start_idx(size);
-    extend_heap_size = 1 << idx;
+    int idx = find_size_class_idx(size);
+    extend_heap_size = 1 << (idx + MIN_SIZE_CLASS_IDX);
     if ((bp = extend_heap(extend_heap_size / ADDR_SIZE)) == NULL)
         // free_list 연결 불필요, 추후 free 시 연결해주면 됨
         return NULL;
@@ -182,16 +196,16 @@ void *mm_realloc(void *ptr, size_t size) {
 
 /* ==================== Utility ==================== */
 
-static int find_start_idx(size_t size) {
-    if (size > 2 << (IDX_LIST_CNT - 2)) {
-        return IDX_LIST_CNT - 1;
+static int find_size_class_idx(size_t size) {
+    for (int i = MIN_SIZE_CLASS_IDX; i <= MAX_SIZE_CLASS_IDX; i++) {
+        if (size <= (1 << i)) {
+            return i - MIN_SIZE_CLASS_IDX;
+        }
     }
-
-    return (int)ceil(log2(size));
 }
 
 static void **find_start_bpp(size_t size) {
-    int idx = find_start_idx(size);
+    int idx = find_size_class_idx(size);
     return index_list_p + idx * ADDR_SIZE;
 }
 
@@ -201,7 +215,7 @@ static void *extend_heap(size_t words) {
     if ((long)(bp = mem_sbrk(size)) == -1)                                   // 힙 확장
         return NULL;
 
-    set_block(bp, size, FREE);
+    set_free_block(bp, size, NULL);
     return bp;
 }
 
@@ -210,4 +224,9 @@ static void exclude_free_block(void **bpp) { BLK_PTR(bpp) = BLK_PTR(BLK_PTR(bpp)
 static void set_block(void *bp, size_t size, BlockStatus alloced) {
     PUT(HDRP(bp), PACK(size, alloced));
     PUT(FTRP(bp), PACK(size, alloced));
+}
+
+static void set_free_block(void *bp, size_t size, void *next_bp) {
+    PUT(HDRP(bp), size);
+    NEXT_FREEP(bp) = next_bp;
 }
