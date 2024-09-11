@@ -66,6 +66,7 @@ typedef enum { FREE = 0, ALLOCATED = 1 } BlockStatus;
 
 #define HDRP(bp) ((char *)(bp) - ADDR_SIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - 2 * ADDR_SIZE)
+#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
 
 #define BLK_PTR(p) (*(void **)(p))
 #define NEXT_FREEP(bp) (BLK_PTR(bp + ADDR_SIZE))
@@ -75,7 +76,9 @@ static void **find_start_bpp(size_t size);
 static void *extend_heap(size_t words);
 static void exclude_free_block(void **bpp);
 static void set_block(void *, size_t, BlockStatus);
-static void set_free_block(void *bp, size_t size, void *next_bp);
+static void set_free_block(void *bp, size_t size);
+static void **find_start_bpp_from_idx(int idx);
+static void split_n_connect(void *bp, size_t size);
 
 /*
  * mm_init - initialize the malloc package.
@@ -131,44 +134,51 @@ void mm_free(void *bp) {
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size) {
-    size_t asize;
-    size_t extend_heap_size;
-    char *bp;
-
     if (size <= 0)
         return NULL;
 
-    size_t header_n_footer_size = 2 * ADDR_SIZE;
+    size_t extend_heap_size;
+    char *bp;
+    size_t asize = size + 1; // HDR 1WORD 보장
 
-    /**
-     * Adjust block size to include overhead and alignment reqs.
-     * 최소 16바이트 크기의 블록 구성
-     * */
-    if (size <= DSIZE)
-        asize = MIN_BLOCK_SIZE; // header_n_footer_size + DSIZE
-    else
-        /**
-         * 1. (size + (헤더와 푸터 크기) + (정렬 맞추기 보정))
-         * 2. asize / DSIZE = 필요한 블록 크기 계산
-         * 3. asize * DSIZE = 실제 메모리 블록 크기 결정
-         * */
-        asize = DSIZE * ((size + (header_n_footer_size) + (DSIZE - 1)) / DSIZE);
-
-    /* Search the free list for a fit */
-
-    void **bpp = find_start_bpp(size);
+    // 1. 가용 free 리스트에서 fit-가용블록 찾기
+    void **bpp = find_start_bpp(asize);
     if ((bp = BLK_PTR(bpp)) != NULL) {
         exclude_free_block(bpp);
+        PUT(HDRP(bp), PACK(size, ALLOCATED));
         return bp;
     }
 
-    /* No fit found. Get more memory and place the block */
-    int idx = find_size_class_idx(size);
-    extend_heap_size = 1 << (idx + MIN_SIZE_CLASS_IDX);
+    // 2. 상위 size-class traversal 및 split
+    int target_idx = find_size_class_idx(asize);
+    for (int i = target_idx + 1; i <= MAX_SIZE_CLASS_IDX; i++) {
+        void **bpp = find_start_bpp_from_idx(i);
+
+        if ((bp = BLK_PTR(bpp)) != NULL) {
+            exclude_free_block(bpp);
+
+            size_t cur_block_size = 1 << i;
+            size_t target_block_size = i << target_idx;
+
+            PUT(HDRP(bp), PACK(target_block_size, ALLOCATED));
+            int s;
+            for (s = cur_block_size; s > target_block_size; s /= 2) {
+                split_n_connect(bp + (s / 2) * ADDR_SIZE, s);
+            }
+
+            return bp;
+        }
+    }
+
+    // 3. 상위 size-class 만큼 추가 할당 후 split
+    extend_heap_size = 1 << (target_idx + 1);
     if ((bp = extend_heap(extend_heap_size / ADDR_SIZE)) == NULL)
         // free_list 연결 불필요, 추후 free 시 연결해주면 됨
         return NULL;
 
+    int half_size = (int)(GET_SIZE(bp) / 2);
+    PUT(HDRP(bp), PACK(half_size, ALLOCATED));
+    split_n_connect(NEXT_BLKP(bp), half_size);
     return bp;
 }
 
@@ -196,6 +206,15 @@ void *mm_realloc(void *ptr, size_t size) {
 
 /* ==================== Utility ==================== */
 
+static void split_n_connect(void *bp, size_t size) {
+    set_free_block(bp, size);
+
+    void **bpp = find_start_bpp(size);
+    void *next_bp = BLK_PTR(bpp);
+    BLK_PTR(bp) = next_bp;
+    BLK_PTR(bpp) = bp;
+}
+
 static int find_size_class_idx(size_t size) {
     for (int i = MIN_SIZE_CLASS_IDX; i <= MAX_SIZE_CLASS_IDX; i++) {
         if (size <= (1 << i)) {
@@ -204,19 +223,21 @@ static int find_size_class_idx(size_t size) {
     }
 }
 
+static void **find_start_bpp_from_idx(int idx) { return index_list_p + idx * ADDR_SIZE; }
+
 static void **find_start_bpp(size_t size) {
     int idx = find_size_class_idx(size);
-    return index_list_p + idx * ADDR_SIZE;
+    return find_start_bpp_from_idx(idx);
 }
 
 static void *extend_heap(size_t words) {
-    char *bp;
+    char *hbp;
     size_t size = (words % 2) ? (words + 1) * ADDR_SIZE : words * ADDR_SIZE; // 더블 워드 정렬 유지
-    if ((long)(bp = mem_sbrk(size)) == -1)                                   // 힙 확장
+    if ((long)(hbp = mem_sbrk(size)) == -1)                                  // 힙 확장
         return NULL;
 
-    set_free_block(bp, size, NULL);
-    return bp;
+    set_free_block(hbp + ADDR_SIZE, size);
+    return hbp + ADDR_SIZE;
 }
 
 static void exclude_free_block(void **bpp) { BLK_PTR(bpp) = BLK_PTR(BLK_PTR(bpp)); }
@@ -226,7 +247,7 @@ static void set_block(void *bp, size_t size, BlockStatus alloced) {
     PUT(FTRP(bp), PACK(size, alloced));
 }
 
-static void set_free_block(void *bp, size_t size, void *next_bp) {
-    PUT(HDRP(bp), size);
-    NEXT_FREEP(bp) = next_bp;
+static void set_free_block(void *bp, size_t size) {
+    PUT(HDRP(bp), PACK(size, FREE));
+    NEXT_FREEP(bp) = NULL;
 }
